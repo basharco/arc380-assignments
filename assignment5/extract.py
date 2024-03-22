@@ -1,11 +1,7 @@
 import os
 
-import pyrealsense2 as rs
 import numpy as np
 import cv2
-from matplotlib import pyplot as plt
-import compas.geometry as cg
-import compas_rrc as rrc
 
 from ARC380_Assignment5_helper import capture_img
 
@@ -118,7 +114,7 @@ def extract_features(img: np.ndarray, path: str) -> list[dict[str, str | float |
             "orientation": orientation
         })
 
-        cv2.putText(iamge=img, text=shape, org=(x, y - Y_DIST), font=cv2.FONT_HERSHEY_SIMPLEX, fontscale=FONTSCALE, thickness=LINE_THICKNESS)
+        cv2.putText(img, shape, (x, y - Y_DIST), cv2.FONT_HERSHEY_SIMPLEX, FONTSCALE, LINE_THICKNESS)
         cv2.imwrite(path, img)
 
         return features
