@@ -1,4 +1,4 @@
-import time
+import os
 
 import pyrealsense2 as rs
 import numpy as np
@@ -7,16 +7,29 @@ from matplotlib import pyplot as plt
 import compas.geometry as cg
 import compas_rrc as rrc
 
-from ..Assignment4.ARC380_Assignment4 import create_frame_from_points, transform_task_to_world_frame, lift, go_home, go_to_point
-
 from ARC380_Assignment5_helper import capture_img
 
-# COORDINATES
-POINT = [132.41, 451.07, 26.12]
-POINT_XAXIS = [-89.87, 451.06, 27.10]
-POINT_XYPLANE = [29.89, 295.55, 25]
 
-def extract_features(img: np.ndarray) -> list[dict[str, str | float | list[float]]]:
+# VALUE FOR THRESHOLDING
+THRESHOLD = 200 # 255 is white
+
+# EPSILON FOR CONTOUR APPROXIMATION
+EPS = 0.01
+
+# THICKNESS FOR BOUNDING BOXES
+LINE_THICKNESS = 2
+
+# PADDING FOR SQUARE DETECTION
+PADDING = 0.1
+
+# FONT SIZE
+FONTSCALE = 0.6
+
+# SPACE BETWEEN TOP OF BOUNDING BOX AND LABEL
+Y_DIST = 10
+
+
+def extract_features(img: np.ndarray, path: str) -> list[dict[str, str | float | list[float]]]:
     """Extract features from an image.
 
     Args:
@@ -26,33 +39,97 @@ def extract_features(img: np.ndarray) -> list[dict[str, str | float | list[float
         list[dict[str, str | float | np.ndarray]]: A list of dictionaryies--each dictionary belonging to a feature and
             containing relevant characterstic information. Values returned are "color", "shape", "size", "position",
             "orientation".
+
+            Sample:
+            [
+                {
+                    "color": [127, 50, 250],
+                    "shape": "triangle",
+                    "size": 50,
+                    "position": [400, 110, 24],
+                    "orientation": 45
+                },
+                {
+                    "color": [255, 255, 255],
+                    "shape": "rectangle",
+                    "size": 100,
+                    "position": [350, 180, 30],
+                    "orientation": -1
+                }
+            ]
     """
-    pass
+
+    # convert image to grayscale
+    gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    _, threshold_img = cv2.threshold(gray_img, THRESHOLD, 255, cv2.THRESH_BINARY)
+
+    # 'contours' is a list containing groups of points. Each group outlines the boundaries (vertices) of a shape found
+    # in the image.
+    contours = cv2.findContours(threshold_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    features = []
+
+    for i in range(1, len(contours)):
+        contour = contours[i]
+        approx_contour = cv2.approxPolyDP(contour, EPS * cv2.arclength(contour, True), True)
+        moments = cv2.moments(approx_contour)
+
+        # calculate contour's area/size
+        size = moments['m00']
+
+        # calculate contour's center/position
+        center_x = int(moments['m10'] / size)
+        center_y = int(moments['m01'] / size)
+
+        # get color (BGR?) at center of contour
+        color = img[center_y][center_x]
+
+        # calculate and draw bounding box around contour
+        x, y, w, h = cv2.boundingRect(approx_contour)
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, LINE_THICKNESS)
+
+        shape = ""
+        orientation = -1 # if contour is not a square, orientation is -1
+
+        if len(contour) == 3:
+            shape = "triangle"
+        elif len(contour) == 4:
+            ratio = float(w) / h
+
+            if ratio >= 1 - PADDING and ratio <= 1 + PADDING:
+                shape = "square"
+
+                _, _, _, _, orientation = cv2.minAreaRect(approx_contour)
+            else:
+                shape = "rectangle"
+        elif len(contour) == 5:
+            shape = "pentagon"
+        elif len(contour) == 6:
+            shape = "hexagon"
+        else:
+            shape = "circle"
+
+        features.append({
+            "color": color,
+            "shape": shape,
+            "size": size, # in pixels?
+            "position": [center_x, center_y], # in image coordinates?
+            "orientation": orientation
+        })
+
+        cv2.putText(iamge=img, text=shape, org=(x, y - Y_DIST), font=cv2.FONT_HERSHEY_SIMPLEX, fontscale=FONTSCALE, thickness=LINE_THICKNESS)
+        cv2.imwrite(path, img)
+
+        return features
 
 
 if __name__ == '__main__':
-    
-    # Create Ros Client
-    ros = rrc.RosClient()
-    ros.run()
+    """Each time this script is executed, a new folder will be created inside of the './images' directory. This folder
+        will contain two PNG files--the orignal captured image and the annotated version of the same image.
+    """
+    folder = os.path.join("./images", f"image-{len(os.listdir("./images")) + 1}")
+    img = capture_img(save=True, str=os.path.join(folder, "original.png"))
+    features = extract_features(img, os.path.join(folder, "annotated.png"))
 
-    # Create ABB Client
-    abb_rrc = rrc.AbbClient(ros, '/rob1-rw6')
-    print('Connected.')
-
-    abb_rrc.send(rrc.SetTool('vac_gripper'))
-
-    abb_speed = 30 # [mm/s]
-
-    task_space_point1 = cg.Point(POINT[0], POINT[1], POINT[2])
-    task_space_point2 = cg.Point(POINT_XAXIS[0], POINT_XAXIS[1], POINT_XAXIS[2])
-    task_space_point3 = cg.Point(POINT_XYPLANE[0], POINT_XYPLANE[1], POINT_XYPLANE[2])
-
-    ee_point1 = cg.Point(0, 0, 0)
-    ee_point2 = cg.Point(1, 0, 0)
-    ee_point3 = cg.Point(0, -1, 0)
-
-    task_frame = create_frame_from_points(task_space_point1, task_space_point2, task_space_point3)
-    ee_frame = create_frame_from_points(ee_point1, ee_point2, ee_point3)
-
-    origin = transform_task_to_world_frame(ee_frame, task_frame)
+    print(features)
